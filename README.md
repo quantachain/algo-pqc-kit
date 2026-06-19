@@ -2,7 +2,7 @@
 
 **The first complete Algorand-native post-quantum cryptography developer toolkit.**
 
-[![PyPI](https://img.shields.io/pypi/v/algo-pqc-kit)](https://pypi.org/project/algo-pqc-kit)
+[![PyPI](https://img.shields.io/pypi/v/algo-pqc-kit)](https://pypi.org/project/algo-pqc-kit/0.3.0/)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE-MIT)
 [![AVM](https://img.shields.io/badge/AVM-v12-green)](https://developer.algorand.org)
 [![PQC](https://img.shields.io/badge/crypto-Falcon--1024%20%7C%20FN--DSA-purple)](https://csrc.nist.gov/pubs/fips/206/final)
@@ -11,23 +11,27 @@
 
 ## What Is This?
 
-Algorand's AVM v12 (deployed November 2025) introduced the `falcon_verify` opcode — enabling **on-chain Falcon-1024 post-quantum signature verification**. But there was no developer toolkit to make it usable.
+Algorand's AVM v12 (deployed November 2025) introduced the `falcon_verify` opcode, enabling **on-chain Falcon-1024 post-quantum signature verification**. But there was no developer toolkit to make it usable.
 
 `algo-pqc-kit` fills that gap:
 
 | Layer | What It Does |
 |---|---|
-| **Puya Smart Contracts** | `FalconVault` (M-of-N PQC vault), `FalconLsig` (PQC account), `PQCDao` (PQC governance) |
-| **Python SDK** | `FalconAccount`, `FalconMultisig` — generate keys, derive addresses, sign, co-sign |
-| **AlgoKit Plugin** | `algokit generate pqc-vault` — scaffold a full PQC vault in one command |
+| **Puya Smart Contracts** | `FalconVault` (M-of-N PQC treasury with arbitrary transactions and dynamic membership), `FalconLsig` (PQC account), `PQCDao` (PQC governance with timelocks and voting periods) |
+| **Python SDK** | `FalconAccount`, `FalconMultisig`, `PQCVault` -- generate keys, derive addresses, sign, co-sign, deploy |
+| **Deployment Scripts** | `scripts/deploy.py` -- deploy contracts to LocalNet, TestNet, or MainNet |
 
 ---
 
-## Quick Start
+## Install
 
 ```bash
 pip install algo-pqc-kit
 ```
+
+---
+
+## Quick Start
 
 ```python
 from algo_pqc_kit import FalconAccount, FalconMultisig
@@ -64,41 +68,69 @@ print(f"Ready for on-chain submission: {payload.is_complete()}")
 
 ## Smart Contracts
 
-Three ARC-4 contracts, all using the AVM `falcon_verify` opcode:
+Three ARC-4 contracts compiled with PuyaPy, all using the AVM v12 `falcon_verify` opcode:
 
-### `FalconVault` — M-of-N Post-Quantum Treasury
+### `FalconVault` -- M-of-N Post-Quantum Treasury
 
 ```bash
-cd contracts/
-puyapy falcon_vault.py  # compiles to TEAL + ABI
-algokit deploy          # deploys to Testnet
+puyapy --target-avm-version 12 contracts/falcon_vault.py
 ```
 
-A treasury that releases ALGO, ASAs, or executes arbitrary Application Calls when M-of-N Falcon-1024 signatures are verified **on-chain**. Features dynamic membership (add/remove signers via proposals) and uses replay-protected nonces.
+A generalized multisig treasury supporting five proposal types:
 
-### `FalconLsig` — PQC Logic Signature Account
+| Type | Description |
+|---|---|
+| 0 - Payment | Send ALGO to any address |
+| 1 - Asset Transfer | Transfer any ASA token |
+| 2 - Application Call | Execute arbitrary smart contract calls |
+| 3 - Add Signer | Propose adding a new Falcon-1024 guardian |
+| 4 - Remove Signer | Propose removing an existing guardian |
+
+All proposals require M-of-N Falcon-1024 signatures verified on-chain before execution. The threshold auto-adjusts when signers are removed to prevent deadlocks.
+
+### `FalconLsig` -- PQC Logic Signature Account
 
 The foundational primitive: a Logic Signature that embeds a Falcon-1024 public key and gates all spending via `falcon_verify`. This is how Algorand PQC accounts work.
 
-### `PQCDao` — Post-Quantum DAO Governance
+### `PQCDao` -- Post-Quantum DAO Governance
 
-A complete DAO where every spending proposal requires M-of-N committee members to sign with their Falcon-1024 keys. Features Voting Periods, Execution Delays (Timelocks), and explicit Yes/No voting choices. No Ed25519 anywhere in the governance flow.
+A structured governance contract with production-grade controls:
+
+- **Voting Periods**: Proposals define a `start_time` and `end_time`. Votes outside the window are rejected.
+- **Execution Delays (Timelocks)**: A mandatory delay between the voting period closing and when the proposal can be executed, preventing flash-governance attacks.
+- **Yes/No Voting**: Members explicitly vote Yes (1) or No (2) with their Falcon-1024 signatures. Proposals must reach quorum AND have more Yes than No votes to pass.
+- **Replay Protection**: Each vote is bound to a specific proposal and signer index.
+
+No Ed25519 anywhere in the governance flow.
 
 ---
 
-## Testnet Deployments
+## Contract Compilation
 
-> Contracts verified on Algorand Testnet — check the [deployments](docs/deployments.md) page for live app IDs and transaction links.
-
----
-
-## AlgoKit Plugin (Coming in v0.2)
+Requires [PuyaPy](https://github.com/algorandfoundation/puya) and AVM v12 target:
 
 ```bash
-algokit generate pqc-vault
+puyapy --target-avm-version 12 contracts/falcon_vault.py contracts/pqc_dao.py
 ```
 
-Scaffolds a complete PQC vault project: keypairs, contracts, deployment scripts — zero configuration required.
+This generates ARC-56 app spec files (`.arc56.json`), TEAL approval/clear programs, and source maps in the `contracts/` directory.
+
+---
+
+## Deployment
+
+```bash
+# LocalNet (requires Docker + AlgoKit)
+python scripts/deploy.py --network localnet
+
+# TestNet
+python scripts/deploy.py --network testnet
+
+# MainNet
+python scripts/deploy.py --network mainnet
+```
+
+For TestNet/MainNet deployments, configure your `.env` file (see `.env.example`).
 
 ---
 
@@ -107,7 +139,7 @@ Scaffolds a complete PQC vault project: keypairs, contracts, deployment scripts 
 ### The AVM `falcon_verify` Opcode
 
 ```
-falcon_verify(data: []byte, sig: [1232]byte, pubkey: [1793]byte) → bool
+falcon_verify(data: []byte, sig: [1232]byte, pubkey: [1793]byte) -> bool
 ```
 
 - **Cost:** 1700 opcodes per verification
@@ -127,21 +159,45 @@ address      = base32( sha512_256("Program" || lsig_program) + checksum )
 
 Every Falcon-1024 public key has a unique, deterministic Algorand address.
 
+### Box Storage Multi-Transaction Pattern
+
+Falcon-1024 public keys are 1793 bytes and signatures are up to 1280 bytes, exceeding the AVM's 2048-byte ApplicationArgs limit. The contracts use a multi-transaction session pattern where keys and signatures are written sequentially into Box Storage, enabling theoretically infinite M-of-N threshold sizes.
+
 ---
 
 ## Security
 
-- **Quantum-resistant:** Falcon-1024 (NIST FN-DSA) — secure against Shor's algorithm
-- **Replay protection:** All vault/DAO messages include a nonce
-- **No admin key:** Contracts are immutable after deployment
+- **Quantum-resistant:** Falcon-1024 (NIST FN-DSA) -- secure against Shor's algorithm
+- **Replay protection:** All vault/DAO messages include bound proposal IDs and signer indices
+- **Checks-Effects-Interactions:** State is updated before any external calls to prevent reentrancy
+- **Dynamic threshold safety:** Removing signers auto-adjusts the threshold downward to prevent lockouts
 - **Misuse-resistant SDK:** Signatures verified at collection time in co-signing sessions
 - **No C FFI:** Pure Python SDK (wraps Algorand's deterministic Falcon implementation)
 
 ---
 
+## Project Structure
+
+```
+algo-pqc-kit/
+  algo_pqc_kit/          # PyPI package (import algo_pqc_kit)
+    account.py           # FalconAccount -- keypair generation, signing, address derivation
+    multisig.py          # FalconMultisig -- M-of-N co-signing sessions
+    vault.py             # PQCVault -- deploy and interact with FalconVault
+  contracts/             # Puya smart contracts (AVM v12)
+    falcon_vault.py      # Enterprise multisig vault
+    pqc_dao.py           # DAO governance with timelocks
+  scripts/
+    deploy.py            # Deployment automation (LocalNet/TestNet/MainNet)
+  tests/                 # PyTest suite
+  examples/              # Usage examples
+```
+
+---
+
 ## Relationship to `falcon-multisig`
 
-The cryptographic engine is extracted from [`falcon-multisig`](https://crates.io/crates/falcon-multisig) — a production Rust library battle-tested in [QuantaChain](https://github.com/quantachain/quanta) across 80,000+ Falcon-512 consensus blocks. `algo-pqc-kit` is the Algorand integration layer on top of that proven foundation.
+The cryptographic engine is extracted from [`falcon-multisig`](https://crates.io/crates/falcon-multisig), a production Rust library battle-tested in [QuantaChain](https://github.com/quantachain/quanta) across 80,000+ Falcon-512 consensus blocks. `algo-pqc-kit` is the Algorand integration layer on top of that proven foundation.
 
 ---
 
@@ -155,7 +211,7 @@ MIT OR Apache-2.0
 
 | Resource | URL |
 |---|---|
-| PyPI | https://pypi.org/project/algo-pqc-kit |
+| PyPI | https://pypi.org/project/algo-pqc-kit/0.3.0/ |
 | crates.io (engine) | https://crates.io/crates/falcon-multisig |
 | NIST FIPS 206 | https://csrc.nist.gov/pubs/fips/206/final |
 | Algorand PQC Brief | https://algorand.co/blog/technical-brief-quantum-resistant-transactions-on-algorand-with-falcon-signatures |
